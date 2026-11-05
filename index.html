@@ -489,9 +489,6 @@ details.more > div{margin-top:8px}
 <div class="toast" id="toast" hidden></div>
 <div id="modal"></div>
 
-<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 <script src="config.js"></script>
 <style>
 #gate{position:fixed;inset:0;z-index:100;background:var(--bg);overflow:auto;display:flex;align-items:flex-start;justify-content:center;
@@ -510,9 +507,11 @@ details.more > div{margin-top:8px}
 .gerr:empty{display:none}
 .glinks{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap}
 .glinks button{border:0;background:none;color:var(--accent);font-weight:600;cursor:pointer;padding:4px 0}
-.urow{display:grid;grid-template-columns:minmax(0,1fr) 170px;gap:8px;align-items:center;padding:8px 10px;border:1px solid var(--line);border-radius:10px;background:var(--paper)}
+.urow{display:grid;grid-template-columns:minmax(0,1fr) 180px;gap:8px;align-items:center;padding:8px 10px;border:1px solid var(--line);border-radius:10px;background:var(--paper)}
 .urow small{display:block;color:var(--muted);overflow:hidden;text-overflow:ellipsis}
-.urow.pending{border-color:var(--soon);background:color-mix(in srgb,var(--soon) 12%,var(--paper))}
+.urow.pending{border-color:var(--soon)}
+.urow .uact{grid-column:1/-1;display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.urow .uact input{flex:1;min-width:140px;height:32px}
 .tabs a .badge{margin-left:6px}
 @media (max-width:640px){.urow{grid-template-columns:minmax(0,1fr)}}
 </style>
@@ -525,170 +524,225 @@ details.more > div{margin-top:8px}
 (function(){
 const $=s=>document.querySelector(s);
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const API=window.CASATO_API||'';
 const ROLE_TXT={pending:'In attesa (nessun accesso)',cameriere:'Cameriere · solo guardare',gestore:'Gestore di sala',admin:'Amministratore'};
 const MAP={admin:'admin',gestore:'manager',cameriere:'viewer'};
-const G=window.__staff={users:[],me:null,isOwner:false,role:null};
-let auth,fs,resolveApp=null,started=false,unsubMe=null,unsubUsers=null;
+const LS_T='casato.token',LS_D='casato.cache.v1';
+const lsGet=k=>{try{return localStorage.getItem(k)}catch(e){return null}};
+const lsSet=(k,v)=>{try{v==null?localStorage.removeItem(k):localStorage.setItem(k,v)}catch(e){}};
+const G=window.__staff={users:[],me:null,role:null,token:lsGet(LS_T)};
+let resolveApp=null,started=false;
 const appReady=new Promise(r=>resolveApp=r);
 window.__GATE__=()=>appReady;
 
-function view(html){$('#gate').hidden=false;$('#gview').innerHTML=html;const f=$('#gview input');f&&f.focus()}
-function authErr(e){const c=(e&&e.code)||'';
-  if(c.includes('invalid-credential')||c.includes('wrong-password')||c.includes('user-not-found'))return'Email o password non corretti.';
-  if(c.includes('email-already-in-use'))return'Esiste già un account con questa email: accedi.';
-  if(c.includes('invalid-email'))return'L\'email non è valida.';
-  if(c.includes('weak-password'))return'La password deve avere almeno 6 caratteri.';
-  if(c.includes('too-many-requests'))return'Troppi tentativi: riprova tra qualche minuto.';
-  if(c.includes('network'))return'Nessuna connessione a internet.';
-  if(c.includes('operation-not-allowed'))return'Accesso con email non attivo: va attivato in Firebase › Authentication.';
-  if(c.includes('unauthorized-domain'))return'Questo indirizzo non è autorizzato in Firebase › Authentication › Domini autorizzati.';
-  return'Operazione non riuscita ('+(c||'errore')+').';}
+async function call(action,body={}){
+  let r;
+  try{r=await fetch(API,{method:'POST',body:JSON.stringify(Object.assign({action,token:G.token},body)),redirect:'follow'})}
+  catch(e){throw{code:'network',message:'Nessuna connessione con il server.'}}
+  let j;try{j=await r.json()}catch(e){throw{code:'internal',message:'Risposta non valida dal server.'}}
+  if(!j.ok){if(j.code==='unauthenticated'&&action!=='login'){logout(true)}throw j}
+  return j;
+}
 
-function loginView(msg){
+/* ================= archivio (stessa interfaccia usata dall'app) ================= */
+const Store=(()=>{
+  const docs=new Map();let ver=0,synced=false,timer=null,busy=false;const listeners=new Set();let firstSync;const firstP=new Promise(r=>firstSync=r);
+  function loadCache(uid){try{const c=JSON.parse(lsGet(LS_D)||'null');if(c&&c.uid===uid){ver=c.ver||0;(c.docs||[]).forEach(([k,v])=>docs.set(k,v))}}catch(e){}}
+  function saveCache(){try{lsSet(LS_D,JSON.stringify({uid:G.me&&G.me.id,ver,docs:[...docs]}))}catch(e){}}
+  const notify=()=>listeners.forEach(f=>{try{f()}catch(e){console.error(e)}});
+  async function pull(){
+    if(busy)return;busy=true;
+    try{const j=await call('pull',{since:ver});let changed=!synced;
+      (j.docs||[]).forEach(d=>{const k=d.col+'/'+d.id;if(pendingKeys.has(k))return;if(d.deleted){if(docs.delete(k))changed=true}else{docs.set(k,d.data);changed=true}});
+      ver=j.now||ver;synced=true;firstSync();if(j.me)onMe(j.me);
+      if(changed){saveCache();notify()}
+    }catch(e){if(e.code==='pending'&&e.me)onMe(e.me);else if(e.code==='permission-denied')onMe(Object.assign({},G.me,{role:'pending'}));}
+    finally{busy=false}
+  }
+  function schedule(){clearTimeout(timer);timer=setTimeout(async()=>{await pull();schedule()},document.hidden?30000:6000)}
+  document.addEventListener('visibilitychange',()=>{if(!document.hidden&&synced){pull();schedule()}});
+  /* scritture: ottimistiche, raggruppate */
+  const pendingKeys=new Map();let queue=[],flushT=null;
+  function enqueue(op){return new Promise((res,rej)=>{queue.push(Object.assign(op,{res,rej}));const k=op.col+'/'+op.id;pendingKeys.set(k,(pendingKeys.get(k)||0)+1);
+    clearTimeout(flushT);flushT=setTimeout(flush,120)})}
+  async function flush(){
+    const batch=queue.splice(0,100);if(!batch.length)return;
+    try{const j=await call('write',{ops:batch.map(o=>({op:o.op,col:o.col,id:o.id,data:o.data}))});
+      batch.forEach(o=>o.res());
+    }catch(e){batch.forEach(o=>o.rej(e));ver=0;}
+    finally{batch.forEach(o=>{const k=o.col+'/'+o.id,n=(pendingKeys.get(k)||1)-1;n?pendingKeys.set(k,n):pendingKeys.delete(k)});
+      if(queue.length)flush();else{await pull()}}
+  }
+  function set(col,id,data){docs.set(col+'/'+id,JSON.parse(JSON.stringify(data)));saveCache();notify();return enqueue({op:'set',col,id,data})}
+  function del(col,id){docs.delete(col+'/'+id);saveCache();notify();return enqueue({op:'delete',col,id})}
+  function list(col){const out=[];const p=col+'/';for(const[k,v]of docs)if(k.startsWith(p)&&k.indexOf('/',p.length)<0)out.push([k.slice(p.length),v]);return out}
+  return{docs,listeners,pull,schedule,set,del,list,loadCache,firstP,get synced(){return synced},all:()=>docs};
+})();
+const meta=()=>({fromCache:!Store.synced,hasPendingWrites:false});
+const frozen=v=>v==null?undefined:JSON.parse(JSON.stringify(v));
+function docSnap(id,v){return{id,exists:v!==undefined,data:()=>frozen(v),metadata:meta()}}
+function cmp(x,op,v){switch(op){case'==':return x===v;case'!=':return x!==v;case'<':return x<v;case'<=':return x<=v;case'>':return x>v;case'>=':return x>=v;
+  case'in':return Array.isArray(v)&&v.includes(x);case'not-in':return Array.isArray(v)&&!v.includes(x);case'array-contains':return Array.isArray(x)&&x.includes(v);default:return false}}
+function makeQuery(col,f=[],ord=null,lim=null){
+  const run=()=>{let r=Store.list(col).filter(([,v])=>f.every(([k,op,val])=>cmp(v[k],op,val)));
+    if(ord)r.sort((a,b)=>{const x=a[1][ord[0]],y=b[1][ord[0]];return(x>y?1:x<y?-1:0)*(ord[1]==='desc'?-1:1)});else r.sort((a,b)=>a[0]<b[0]?-1:1);
+    if(lim)r=r.slice(0,lim);const docs=r.map(([id,v])=>docSnap(id,v));return{docs,size:docs.length,empty:!docs.length,metadata:meta(),docChanges:()=>[]}};
+  return{
+    where:(k,op,v)=>makeQuery(col,[...f,[k,op,v]],ord,lim),orderBy:(k,d)=>makeQuery(col,f,[k,d||'asc'],lim),limit:n=>makeQuery(col,f,ord,n),
+    async get(){if(!Store.synced)await Promise.race([Store.firstP,new Promise(r=>setTimeout(r,8000))]);return run()},
+    onSnapshot(next){const fn=()=>next(run());Store.listeners.add(fn);setTimeout(fn,0);return()=>Store.listeners.delete(fn)},
+    doc:id=>makeDoc(col,id||Math.random().toString(36).slice(2,11)+Date.now().toString(36)),
+    async add(d){const r=makeDoc(col,Math.random().toString(36).slice(2,11)+Date.now().toString(36));await r.set(d);return r}
+  };
+}
+function makeDoc(col,id){
+  const k=col+'/'+id;
+  return{id,path:k,
+    async get(){if(!Store.synced)await Promise.race([Store.firstP,new Promise(r=>setTimeout(r,8000))]);return docSnap(id,Store.docs.get(k))},
+    set:d=>Store.set(col,id,d),
+    update:d=>{const cur=Store.docs.get(k);if(!cur)return Promise.reject({code:'not-found'});return Store.set(col,id,Object.assign({},cur,d))},
+    delete:()=>Store.del(col,id),
+    onSnapshot(next){const fn=()=>next(docSnap(id,Store.docs.get(k)));Store.listeners.add(fn);setTimeout(fn,0);return()=>Store.listeners.delete(fn)}};
+}
+const DB={collection:c=>makeQuery(c),doc:p=>{const i=p.lastIndexOf('/');return makeDoc(p.slice(0,i),p.slice(i+1))}};
+
+/* ================= accesso ================= */
+function view(html){$('#gate').hidden=false;$('#gview').innerHTML=html;const f=$('#gview input');f&&f.focus()}
+const errOut=m=>{const e=$('#g-err');if(e)e.textContent=m};
+const val=id=>($('#'+id)||{}).value||'';
+const msg=e=>(e&&e.message)||'Operazione non riuscita.';
+function loginView(m){
   view(`<h2>Accedi</h2>
     <div class="fld"><span>Email</span><input type="email" id="g-email" autocomplete="username"></div>
     <div class="fld"><span>Password</span><input type="password" id="g-pass" autocomplete="current-password"></div>
-    <span class="gerr" id="g-err">${esc(msg||'')}</span>
+    <span class="gerr" id="g-err">${esc(m||'')}</span>
     <button class="btn primary" type="button" data-g="login">Accedi</button>
-    <div class="glinks"><button type="button" data-g="to-reg">Sono nuovo: registrati</button><button type="button" data-g="to-reset">Password dimenticata</button></div>`)}
+    <div class="glinks"><button type="button" data-g="to-reg">Sono nuovo: registrati</button><button type="button" data-g="to-forgot">Password dimenticata</button></div>`)}
 function regView(){
   view(`<h2>Registrati</h2><p>Dopo la registrazione l'amministratore ti assegna il ruolo.</p>
     <div class="fld"><span>Nome e cognome</span><input type="text" id="g-name" autocomplete="name"></div>
     <div class="fld"><span>Email</span><input type="email" id="g-email" autocomplete="username"></div>
-    <div class="fld"><span>Password (almeno 6 caratteri)</span><input type="password" id="g-pass" autocomplete="new-password"></div>
+    <div class="fld"><span>Password (almeno 8 caratteri)</span><input type="password" id="g-pass" autocomplete="new-password"></div>
     <span class="gerr" id="g-err"></span>
     <button class="btn primary" type="button" data-g="register">Crea account</button>
     <div class="glinks"><button type="button" data-g="to-login">Ho già un account: accedi</button></div>`)}
-function resetView(){
-  view(`<h2>Recupera password</h2><p>Ti mandiamo un'email con il link per sceglierne una nuova.</p>
-    <div class="fld"><span>Email</span><input type="email" id="g-email" autocomplete="username"></div>
-    <span class="gerr" id="g-err"></span>
-    <button class="btn primary" type="button" data-g="reset">Invia email</button>
-    <div class="glinks"><button type="button" data-g="to-login">Torna all'accesso</button></div>`)}
-async function pendingView(){
-  let ownerFree=false;try{ownerFree=!(await fs.doc('meta/owner').get()).exists}catch(e){}
+function forgotView(){
+  view(`<h2>Password dimenticata</h2><p>Chiedi all'amministratore: da Impostazioni › Personale può darti una password nuova. Poi la cambi tu da Impostazioni › Il tuo account.</p>
+    <button class="btn" type="button" data-g="to-login">Torna all'accesso</button>`)}
+function pendingView(){
   view(`<h2>Ciao ${esc(G.me.name)}</h2>
     <p>Il tuo account è registrato ed è <b>in attesa</b>. Appena l'amministratore ti assegna un ruolo, il gestionale si apre da solo.</p>
-    ${ownerFree?`<p><b>Nessun amministratore è ancora configurato.</b> Se sei il titolare, prendi tu il controllo: questa scelta si fa una volta sola.</p>
-      <button class="btn primary" type="button" data-g="claim">Sono il titolare: diventa amministratore</button>`:''}
-    <span class="gerr" id="g-err"></span>
     <button class="btn" type="button" data-g="logout">Esci</button>`)}
-const errOut=m=>{const e=$('#g-err');if(e)e.textContent=m};
-const val=id=>($('#'+id)||{}).value||'';
+let pendT=null;
+function onMe(me){
+  const prev=G.role;G.me=me;G.role=me.role;
+  if(!MAP[me.role]){if(started){location.reload();return}pendingView();clearTimeout(pendT);pendT=setTimeout(()=>call('me').then(j=>onMe(j.me)).catch(()=>{pendT=setTimeout(()=>onMe(G.me),15000)}),10000);return}
+  $('#gate').hidden=true;
+  const lo=$('#logout');if(lo){lo.hidden=false;lo.textContent=String(me.name).split(' ')[0]+' · Esci'}
+  if(!started){started=true;Store.loadCache(me.id);Store.pull().then(()=>Store.schedule());resolveApp({db:DB,me:{id:me.id,name:me.name},role:MAP[me.role]})}
+  else if(prev!==me.role&&window.__app)window.__app.setRole(MAP[me.role]);
+  if(me.role==='admin')loadUsers();
+}
+function logout(expired){lsSet(LS_T,null);lsSet(LS_D,null);G.token=null;if(started){location.reload();return}loginView(expired?'Accesso scaduto: entra di nuovo.':'')}
+async function enter(j){G.token=j.token;lsSet(LS_T,j.token);onMe(j.me)}
 
 document.addEventListener('click',async e=>{
   const b=e.target.closest('[data-g]');if(!b)return;const a=b.dataset.g;
   try{
-    if(a==='to-reg')regView();else if(a==='to-login')loginView();else if(a==='to-reset')resetView();
-    else if(a==='login'){b.disabled=true;await auth.signInWithEmailAndPassword(val('g-email').trim(),val('g-pass'))}
-    else if(a==='register'){const name=val('g-name').trim();if(!name){errOut('Scrivi nome e cognome.');return}
-      b.disabled=true;window.__pendingName=name;
-      const c=await auth.createUserWithEmailAndPassword(val('g-email').trim(),val('g-pass'));
-      await c.user.updateProfile({displayName:name});}
-    else if(a==='reset'){await auth.sendPasswordResetEmail(val('g-email').trim());errOut('');$('#gview').insertAdjacentHTML('beforeend','<p><b>Email inviata.</b> Controlla anche lo spam.</p>')}
-    else if(a==='claim'){b.disabled=true;await fs.doc('meta/owner').set({uid:G.me.id,at:Date.now()});await fs.doc('users/'+G.me.id).update({role:'admin'})}
-    else if(a==='logout'){await auth.signOut()}
-  }catch(err){b.disabled=false;errOut(authErr(err));console.error(err)}
+    if(a==='to-reg')regView();else if(a==='to-login')loginView();else if(a==='to-forgot')forgotView();
+    else if(a==='login'){b.disabled=true;await enter(await call('login',{email:val('g-email'),password:val('g-pass')}))}
+    else if(a==='register'){b.disabled=true;await enter(await call('register',{name:val('g-name'),email:val('g-email'),password:val('g-pass')}))}
+    else if(a==='logout')logout();
+  }catch(err){b.disabled=false;errOut(msg(err))}
 });
 document.addEventListener('keydown',e=>{if(e.key==='Enter'&&e.target.closest&&e.target.closest('#gview')){const p=$('#gview .btn.primary');p&&p.click()}});
 
-/* ---------- personale (impostazioni) ---------- */
-function subUsers(){
-  if(unsubUsers)unsubUsers();unsubUsers=null;
-  if(G.role!=='admin'){G.users=[];badge();return}
-  unsubUsers=fs.collection('users').onSnapshot(sn=>{G.users=sn.docs.map(d=>Object.assign({id:d.id},d.data()));badge();window.__app&&window.__app.refreshSettings()},()=>{});
+/* ================= personale ================= */
+let usersT=null;
+async function loadUsers(){
+  clearTimeout(usersT);
+  try{const j=await call('users');G.users=j.users||[];badge();window.__app&&window.__app.refreshSettings()}catch(e){}
+  usersT=setTimeout(loadUsers,document.hidden?60000:20000);
 }
-function badge(){
-  const a=document.querySelector('.tabs a[data-view=settings]');if(!a)return;
-  const n=G.users.filter(u=>u.role==='pending').length;
-  a.innerHTML='Impostazioni'+(n?`<span class="badge">${n}</span>`:'');
-}
+function badge(){const a=document.querySelector('.tabs a[data-view=settings]');if(!a)return;const n=G.users.filter(u=>u.role==='pending').length;a.innerHTML='Impostazioni'+(n?`<span class="badge">${n}</span>`:'')}
+let resetFor=null;
 window.accountCards=function(){
-  const me=G.me||{};
+  const me=G.me||{},isAdm=G.role==='admin';
   const order={pending:0,admin:1,gestore:2,cameriere:3};
   const users=G.users.slice().sort((a,b)=>(order[a.role]??9)-(order[b.role]??9)||String(a.name).localeCompare(String(b.name)));
   const pend=users.filter(u=>u.role==='pending').length;
   return`<div class="card setcard"><h3>Il tuo account</h3>
-      <p><b style="color:var(--ink)">${esc(me.name)}</b> · ${esc(me.email||'')}<br>Ruolo: <b style="color:var(--ink)">${esc(ROLE_TXT[G.role]||G.role)}</b>${G.isOwner?' · titolare':''}</p>
-      <div class="line"><button class="btn" type="button" data-acc="reset">Cambia password</button><button class="btn" type="button" data-g="logout">Esci</button></div>
-      ${G.role==='admin'?`<span class="eyebrow">Backup dei dati</span>
+      <p><b style="color:var(--ink)">${esc(me.name)}</b> · ${esc(me.email||'')}<br>Ruolo: <b style="color:var(--ink)">${esc(ROLE_TXT[G.role]||G.role)}</b>${me.owner?' · titolare':''}</p>
+      <div class="row2"><div class="fld"><span>Password attuale</span><input type="password" id="acc-old" autocomplete="current-password"></div>
+        <div class="fld"><span>Nuova password</span><input type="password" id="acc-new" autocomplete="new-password"></div></div>
+      <div class="line"><button class="btn" type="button" data-acc="pass">Cambia password</button><button class="btn" type="button" data-g="logout">Esci</button></div>
+      ${isAdm?`<span class="eyebrow">Backup dei dati</span>
       <div class="line"><button class="btn" type="button" data-acc="export">Scarica backup</button>
       <label class="btn" for="acc-import">Importa backup</label><input type="file" id="acc-import" accept=".json,application/json" hidden></div>
-      <p class="small">Importa il file <b>dati-gestionale.json</b> per riportare sale e prenotazioni create nella versione su Claude.</p>`:''}</div>
-    ${G.role==='admin'?`<div class="card setcard"><h3>Personale ${pend?`<span class="badge">${pend} in attesa</span>`:''}</h3>
+      <p class="small">Importa il file <b>dati-gestionale.json</b> per riportare sale e prenotazioni create nella versione su Claude. Tutti i dati sono anche nel foglio Google «Dati».</p>`:''}</div>
+    ${isAdm?`<div class="card setcard"><h3>Personale ${pend?`<span class="badge">${pend} in attesa</span>`:''}</h3>
       <p>I dipendenti si registrano da soli dalla pagina di accesso. Qui assegni il ruolo: finché resta «In attesa» non vedono nulla.</p>
       <table class="roles"><tr><th>Ruolo</th><th>Cosa può fare</th></tr>
         <tr><td><b>Amministratore</b></td><td>Tutto, comprese chiusure, turni e personale</td></tr>
         <tr><td><b>Gestore di sala</b></td><td>Prenotazioni, stati, lista d'attesa, sale e tavoli</td></tr>
         <tr><td><b>Cameriere</b></td><td>Solo guardare sala e prenotazioni</td></tr></table>
-      <div class="list">${users.map(u=>{const self=u.id===me.id;
-        return`<div class="urow ${u.role==='pending'?'pending':''}"><span><b>${esc(u.name||'Senza nome')}</b>${self?' (tu)':''}<small>${esc(u.email||'')}${u.createdAt?' · registrato il '+esc(new Date(u.createdAt).toLocaleDateString('it-IT')):''}</small></span>
-        <select data-urole="${esc(u.id)}" aria-label="Ruolo di ${esc(u.name)}"${self?' disabled':''}>${Object.entries(ROLE_TXT).map(([k,l])=>`<option value="${k}"${u.role===k?' selected':''}>${l}</option>`).join('')}</select></div>`}).join('')||'<p class="small">Nessun utente registrato.</p>'}</div>
+      <div class="list">${users.map(u=>{const fixed=u.owner||u.id===me.id;
+        return`<div class="urow ${u.role==='pending'?'pending':''}"><span><b>${esc(u.name||'Senza nome')}</b>${u.id===me.id?' (tu)':''}${u.owner?' · titolare':''}<small>${esc(u.email||'')}${u.createdAt?' · dal '+esc(new Date(u.createdAt).toLocaleDateString('it-IT')):''}</small></span>
+        <select data-urole="${esc(u.id)}" aria-label="Ruolo di ${esc(u.name)}"${fixed?' disabled':''}>${Object.entries(ROLE_TXT).map(([k,l])=>`<option value="${k}"${u.role===k?' selected':''}>${l}</option>`).join('')}</select>
+        ${fixed?'':`<div class="uact">${resetFor===u.id?`<input type="text" id="acc-rp" placeholder="Nuova password (min. 8)" autocomplete="off"><button class="btn sm primary" type="button" data-acc="rp-ok" data-uid="${esc(u.id)}">Salva</button><button class="btn sm ghost" type="button" data-acc="rp-no">Annulla</button>`
+          :`<button class="btn sm" type="button" data-acc="rp" data-uid="${esc(u.id)}">Nuova password</button><button class="btn sm ghost danger" type="button" data-acc="del" data-uid="${esc(u.id)}">Elimina account</button>`}</div>`}</div>`}).join('')||'<p class="small">Nessun utente registrato.</p>'}</div>
       <p class="small">Per invitare un collega mandagli l'indirizzo di questa pagina: si registra con la sua email e compare qui.</p></div>`:''}`;
 };
+const refresh=()=>{window.__app&&window.__app.refreshSettings(true)};
 document.addEventListener('change',async e=>{
   const el=e.target;
-  if(el.dataset&&el.dataset.urole){try{await fs.doc('users/'+el.dataset.urole).update({role:el.value,roleBy:G.me.id,roleAt:Date.now()});toast2('Ruolo aggiornato')}catch(err){toast2('Non è stato possibile cambiare il ruolo.')}}
+  if(el.dataset&&el.dataset.urole){try{await call('setRole',{uid:el.dataset.urole,role:el.value});const u=G.users.find(x=>x.id===el.dataset.urole);if(u)u.role=el.value;badge();toast2('Ruolo aggiornato')}catch(err){toast2(msg(err));loadUsers()}}
   if(el.id==='acc-import'&&el.files&&el.files[0]){importFile(el.files[0]);el.value=''}
 });
+let delArm=null;
 document.addEventListener('click',async e=>{
-  const b=e.target.closest('[data-acc]');if(!b)return;
-  if(b.dataset.acc==='reset'){try{await auth.sendPasswordResetEmail(G.me.email);toast2('Ti ho mandato un\'email per cambiare la password')}catch(err){toast2(authErr(err))}}
-  if(b.dataset.acc==='export')exportData();
+  const b=e.target.closest('[data-acc]');if(!b)return;const a=b.dataset.acc,uid=b.dataset.uid;
+  try{
+    if(a==='pass'){await call('changePassword',{old:val('acc-old'),password:val('acc-new')});toast2('Password cambiata');$('#acc-old').value='';$('#acc-new').value=''}
+    else if(a==='export')exportData();
+    else if(a==='rp'){resetFor=uid;refresh()}
+    else if(a==='rp-no'){resetFor=null;refresh()}
+    else if(a==='rp-ok'){await call('resetPassword',{uid,password:val('acc-rp')});resetFor=null;refresh();toast2('Password impostata: comunicala al collega')}
+    else if(a==='del'){if(delArm!==uid){delArm=uid;b.textContent='Conferma eliminazione';b.classList.add('armed');return}
+      delArm=null;await call('deleteUser',{uid});G.users=G.users.filter(x=>x.id!==uid);badge();refresh();toast2('Account eliminato')}
+  }catch(err){toast2(msg(err))}
 });
 function toast2(m){const t=$('#toast');t.textContent=m;t.hidden=false;clearTimeout(toast2.t);toast2.t=setTimeout(()=>t.hidden=true,3500)}
-async function exportData(){
-  try{const out={maps:{},res:{},settings:{}};
-    (await fs.collection('maps').get()).docs.forEach(d=>out.maps[d.id]=d.data());
-    (await fs.collection('reservations').get()).docs.forEach(d=>out.res[d.id]=Object.assign({id:d.id},d.data()));
-    const s=await fs.doc('settings/main').get();if(s.exists)out.settings=s.data();
-    const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([JSON.stringify(out,null,1)],{type:'application/json'}));
-    a.download='backup-il-casato-'+new Date().toISOString().slice(0,10)+'.json';document.body.appendChild(a);a.click();a.remove();
-  }catch(err){toast2('Backup non riuscito.')}
+function exportData(){
+  const out={maps:{},res:{},settings:{}};
+  for(const[k,v]of Store.all()){const[c,id]=k.split('/');if(c==='maps')out.maps[id]=v;else if(c==='reservations')out.res[id]=Object.assign({id},v);else if(c==='settings'&&id==='main')out.settings=v}
+  const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([JSON.stringify(out,null,1)],{type:'application/json'}));
+  a.download='backup-il-casato-'+new Date().toISOString().slice(0,10)+'.json';document.body.appendChild(a);a.click();a.remove();
 }
 async function importFile(f){
-  try{const data=JSON.parse(await f.text());
-    const writes=[];
-    for(const[id,m]of Object.entries(data.maps||{}))writes.push(['maps',id,m]);
-    for(const[id,r]of Object.entries(data.res||data.reservations||{})){const c=Object.assign({},r);delete c.id;writes.push(['reservations',id,c])}
-    if(data.settings&&Object.keys(data.settings).length)writes.push(['settings','main',data.settings]);
-    if(!writes.length){toast2('Il file non contiene dati del gestionale.');return}
-    for(let i=0;i<writes.length;i+=400){const batch=fs.batch();writes.slice(i,i+400).forEach(([c,id,d])=>batch.set(fs.collection(c).doc(id),JSON.parse(JSON.stringify(d))));await batch.commit()}
+  try{const data=JSON.parse(await f.text());const ps=[];
+    for(const[id,m]of Object.entries(data.maps||{}))ps.push(Store.set('maps',id,m));
+    for(const[id,r]of Object.entries(data.res||data.reservations||{})){const c=Object.assign({},r);delete c.id;ps.push(Store.set('reservations',id,c))}
+    if(data.settings&&Object.keys(data.settings).length)ps.push(Store.set('settings','main',data.settings));
+    if(!ps.length){toast2('Il file non contiene dati del gestionale.');return}
+    toast2('Importazione in corso…');await Promise.all(ps);
     toast2('Importati: '+Object.keys(data.maps||{}).length+' sale e '+Object.keys(data.res||{}).length+' prenotazioni');
-  }catch(err){console.error(err);toast2('Importazione non riuscita: il file non è valido.')}
+  }catch(err){console.error(err);toast2('Importazione non riuscita: '+msg(err))}
 }
 
-/* ---------- avvio ---------- */
+/* ================= avvio ================= */
 function start(){
-  const cfg=window.FIREBASE_CONFIG;
-  if(!cfg||!cfg.apiKey||String(cfg.apiKey).includes('INCOLLA')){view(`<h2>Configurazione mancante</h2><p>Manca la configurazione di Firebase nel file <b>config.js</b>. Segui i passaggi del file LEGGIMI.</p>`);return}
-  if(!window.firebase){view(`<h2>Connessione assente</h2><p>Non riesco a caricare i servizi online. Controlla la connessione e ricarica la pagina.</p>`);return}
-  firebase.initializeApp(cfg);auth=firebase.auth();auth.languageCode='it';fs=firebase.firestore();
-  try{fs.enablePersistence({synchronizeTabs:true}).catch(()=>{})}catch(e){}
-  auth.onAuthStateChanged(async u=>{
-    if(unsubMe){unsubMe();unsubMe=null}
-    if(!u){G.me=null;G.role=null;if(started){location.reload();return}loginView();return}
-    G.me={id:u.uid,name:u.displayName||window.__pendingName||u.email,email:u.email};
-    view('<p>Accesso in corso…</p>');
-    const ref=fs.doc('users/'+u.uid);
-    try{const d=await ref.get();if(!d.exists)await ref.set({name:window.__pendingName||u.displayName||u.email,email:u.email,role:'pending',createdAt:Date.now()})}
-    catch(err){view(`<h2>Errore</h2><p>${esc(authErr(err))}</p><p class="small">Se hai appena creato il progetto, controlla di aver pubblicato le regole di Firestore.</p><button class="btn" type="button" data-g="logout">Esci</button>`);return}
-    try{const o=await fs.doc('meta/owner').get();G.isOwner=o.exists&&o.data().uid===u.uid}catch(e){G.isOwner=false}
-    unsubMe=ref.onSnapshot(async d=>{
-      const data=d.data()||{};if(data.name)G.me.name=data.name;
-      let role=data.role||'pending';if(G.isOwner)role='admin';
-      if(role==='admin'&&!G.isOwner){try{const o=await fs.doc('meta/owner').get();G.isOwner=o.exists&&o.data().uid===u.uid}catch(e){}}
-      const prev=G.role;G.role=role;
-      if(!MAP[role]){if(started){location.reload();return}pendingView();return}
-      $('#gate').hidden=true;
-      const lo=$('#logout');if(lo){lo.hidden=false;lo.textContent=G.me.name.split(' ')[0]+' · Esci'}
-      if(!started){started=true;resolveApp({db:fs,me:{id:u.uid,name:G.me.name},role:MAP[role]})}
-      else if(prev!==role&&window.__app)window.__app.setRole(MAP[role]);
-      subUsers();
-    },err=>{console.error(err)});
-  });
+  if(!API||API.includes('INCOLLA')){view(`<h2>Configurazione mancante</h2><p>Manca l'indirizzo dello script Google nel file <b>config.js</b>.</p>`);return}
+  if(!G.token){loginView();return}
+  view('<p>Accesso in corso…</p>');
+  call('me').then(j=>onMe(j.me)).catch(e=>{
+    if(e.code==='network'){ // offline: apri con i dati salvati
+      try{const c=JSON.parse(lsGet(LS_D)||'null');const me=JSON.parse(lsGet('casato.me')||'null');if(c&&me&&MAP[me.role]){onMe(me);toast2('Sei offline: vedi i dati dell\'ultimo collegamento');return}}catch(x){}
+      view(`<h2>Nessuna connessione</h2><p>Non riesco a raggiungere il server. Controlla la connessione e riprova.</p><button class="btn primary" type="button" onclick="location.reload()">Riprova</button>`);return}
+    loginView(e.code==='unauthenticated'?'Accesso scaduto: entra di nuovo.':msg(e))});
 }
-document.addEventListener('DOMContentLoaded',()=>{const lo=$('#logout');lo&&lo.addEventListener('click',()=>auth&&auth.signOut())});
+const _onMe=onMe;onMe=function(me){try{lsSet('casato.me',JSON.stringify(me))}catch(e){}return _onMe(me)};
+document.addEventListener('DOMContentLoaded',()=>{const lo=$('#logout');lo&&lo.addEventListener('click',()=>logout())});
 start();
 })();
 </script>
@@ -1738,7 +1792,7 @@ wrap.addEventListener('wheel',e=>{if(e.ctrlKey||e.metaKey){e.preventDefault();se
 let rzT;window.addEventListener('resize',()=>{clearTimeout(rzT);rzT=setTimeout(()=>{if(!drag&&S.view==='sala'){applyScale();renderPanelForce()}},120)});
 setInterval(()=>{if(S.view==='sala'&&isToday()&&!drag&&!$('#panel').contains(document.activeElement)){renderStage();if(S.ptab==='wait'&&!S.sel)renderPanelForce()}},60000);
 const ps=prefGet('shift');if(ps&&['pranzo','cena','tutto'].includes(ps)&&false)S.shift=ps;
-window.__app={setRole:r=>setRole(r),refreshSettings:()=>{if(S.view==='settings'&&!$('#view-settings').contains(document.activeElement))renderSettings()}};
+window.__app={setRole:r=>setRole(r),refreshSettings:f=>{const a=document.activeElement;if(S.view==='settings'&&(f||!(a&&$('#view-settings').contains(a)&&/INPUT|SELECT|TEXTAREA/.test(a.tagName))))renderSettings()}};
 boot();
 })();
 </script>

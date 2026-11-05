@@ -1,35 +1,31 @@
 # il Casato · Sala e Prenotazioni
 
-Gestionale per la sala del ristorante **il Casato**: pianta interattiva con tavoli, prenotazioni, lista d'attesa, turni, chiusure, statistiche e personale con ruoli.
+Gestionale per la sala del ristorante **il Casato**: pianta interattiva con tavoli (anche da unire trascinandoli uno sull'altro), prenotazioni, lista d'attesa, turni, chiusure, statistiche e personale con ruoli.
 
-Funziona da telefono, tablet e PC. I dati sono condivisi in tempo reale tra tutti i dispositivi.
+Funziona da telefono, tablet e PC e si installa sulla schermata Home. I dati sono condivisi tra tutti i dispositivi (aggiornamento ogni pochi secondi) e restano consultabili anche offline.
 
-## Ruoli
+## Accesso e ruoli
+
+I dipendenti si registrano da soli con nome, email e password. **Il primo account registrato è il titolare** (amministratore). Gli altri restano «in attesa» finché l'amministratore non assegna un ruolo da **Impostazioni › Personale**.
 
 | Ruolo | Cosa può fare |
 |---|---|
 | Amministratore | Tutto, comprese chiusure, turni e personale |
 | Gestore di sala | Prenotazioni, stati, lista d'attesa, sale e tavoli |
 | Cameriere | Solo guardare sala e prenotazioni |
-| In attesa | Nessun accesso finché l'amministratore non assegna un ruolo |
+| In attesa | Nessun accesso |
 
-I dipendenti si registrano da soli con email e password. L'amministratore assegna il ruolo da **Impostazioni › Personale**. I permessi sono controllati dal server (`firestore.rules`).
+Password dimenticata: l'amministratore ne imposta una nuova da Impostazioni › Personale.
 
-## Messa in funzione
+## Server (Google Sheets)
 
-1. **Firebase** (console.firebase.google.com): crea un progetto.
-   - Authentication › attiva **Email/Password**.
-   - Authentication › Impostazioni › Domini autorizzati › aggiungi `<tuo-utente>.github.io`.
-   - Firestore Database › crea database in modalità produzione.
-   - Firestore Database › **Regole**: incolla il contenuto di `firestore.rules` e pubblica.
-   - Impostazioni progetto › aggiungi app Web › copia `firebaseConfig` dentro `config.js`.
-2. **GitHub Pages**: Settings › Pages › Deploy from a branch › `main` / root.
-3. Apri l'indirizzo della pagina, **registrati per primo** e premi «Sono il titolare: diventa amministratore».
-4. Da Impostazioni puoi importare `dati-gestionale.json` per riportare le sale già create.
+Dati e account sono in un foglio Google con lo script [`apps-script/Code.gs`](apps-script/Code.gs):
 
-## File
+- foglio **Dati**: sale, tavoli, prenotazioni e impostazioni (una riga per documento);
+- foglio **Utenti**: account; le password sono salvate solo come impronta con sale.
 
-- `index.html`: l'app completa.
-- `config.js`: configurazione Firebase.
-- `firestore.rules`: regole di sicurezza.
-- `manifest.webmanifest`, `icon-*.png`: installazione come app sulla schermata Home.
+I permessi sono verificati dallo script, non dal telefono.
+
+Per aggiornare lo script: foglio › Estensioni › Apps Script › incolla `Code.gs` › Salva › Esegui il deployment › Gestisci deployment › ✏️ › Nuova versione › Esegui il deployment (Esegui come: Me, Accesso: Chiunque). L'indirizzo resta lo stesso.
+
+`config.js` contiene l'indirizzo dell'App web dello script.
