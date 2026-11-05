@@ -1,0 +1,48 @@
+rules_version = '2';
+// Regole di sicurezza del gestionale il Casato.
+// Incollale in Firebase › Firestore Database › Regole › Pubblica.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function userPath() { return /databases/$(database)/documents/users/$(request.auth.uid); }
+    function hasRole(r) { return signedIn() && exists(userPath()) && get(userPath()).data.role == r; }
+    function ownerPath() { return /databases/$(database)/documents/meta/owner; }
+    function isOwner() { return signedIn() && exists(ownerPath()) && get(ownerPath()).data.uid == request.auth.uid; }
+    function isAdmin() { return isOwner() || hasRole('admin'); }
+    function isManager() { return isAdmin() || hasRole('gestore'); }
+    function isStaff() { return isManager() || hasRole('cameriere'); }
+
+    // Titolare: lo crea una sola volta il primo che lo richiede.
+    match /meta/owner {
+      allow read: if signedIn();
+      allow create: if signedIn() && request.resource.data.uid == request.auth.uid;
+      allow update, delete: if false;
+    }
+
+    // Account del personale. Ognuno si registra "in attesa"; solo l'amministratore assegna i ruoli.
+    match /users/{uid} {
+      allow read: if signedIn() && (request.auth.uid == uid || isAdmin());
+      allow create: if signedIn() && request.auth.uid == uid && request.resource.data.role == 'pending';
+      allow update: if isAdmin()
+        || (signedIn() && request.auth.uid == uid && request.resource.data.role == resource.data.role);
+      allow delete: if isAdmin();
+    }
+
+    // Turni, chiusure, nome del locale: solo amministratore.
+    match /settings/{id} {
+      allow read: if isStaff();
+      allow write: if isAdmin();
+    }
+
+    // Sale, tavoli e prenotazioni: camerieri leggono, gestori e amministratori scrivono.
+    match /maps/{id} {
+      allow read: if isStaff();
+      allow write: if isManager();
+    }
+    match /reservations/{id} {
+      allow read: if isStaff();
+      allow write: if isManager();
+    }
+  }
+}
