@@ -1,6 +1,6 @@
 # il Casato · Sala e Prenotazioni
 
-Gestionale per la sala del ristorante **il Casato**: pianta interattiva con tavoli (anche da unire trascinandoli uno sull'altro), prenotazioni, lista d'attesa, turni, chiusure, statistiche e personale con ruoli.
+Gestionale per la sala del ristorante **il Casato**: pianta interattiva con tavoli (anche da unire trascinandoli uno sull'altro), prenotazioni, lista d'attesa, turni, chiusure, statistiche, **menu con ingredienti e prezzi**, **ordini ai tavoli** e **pagina della pizzeria** in tempo reale.
 
 Funziona da telefono, tablet e PC e si installa sulla schermata Home. I dati sono condivisi tra tutti i dispositivi (aggiornamento ogni pochi secondi) e restano consultabili anche offline.
 
@@ -12,10 +12,18 @@ I dipendenti si registrano da soli con nome, email e password. **Il primo accoun
 |---|---|
 | Amministratore | Tutto, comprese chiusure, turni e personale |
 | Gestore di sala | Prenotazioni, stati, lista d'attesa, sale e tavoli |
-| Cameriere | Solo guardare sala e prenotazioni |
+| Cameriere | Guarda sala e prenotazioni, prende gli ordini ai tavoli |
+| Pizzaiolo | Pagina Pizzeria: vede le pizze ordinate con il tavolo e le segna fatte |
 | In attesa | Nessun accesso |
 
 Password dimenticata: l'amministratore ne imposta una nuova da Impostazioni › Personale.
+
+## Menu e ordini
+
+- **Menu** (solo amministratore): piatti divisi per reparto (Antipasti, Primi, Secondi, Contorni, Pizze, Dolci, Bevande, Vini) con ingredienti, prezzo e disponibilità; **Aggiunte** a pagamento per reparto.
+- **Ordine**: dal tavolo › Prendi ordine. Ogni piatto si può personalizzare (togli ingredienti, aggiunte, richiesta del cliente). Le pizze vanno in pizzeria.
+- **Pizzeria**: un biglietto per tavolo con le pizze in attesa e il tempo trascorso; si segna fatta ogni pizza o tutto il tavolo. Il cameriere riceve l'avviso «Pizze pronte».
+- **Conto**: dal tavolo › Chiudi conto.
 
 ## Server (Google Sheets)
 
