@@ -20,17 +20,31 @@ Password dimenticata: l'amministratore ne imposta una nuova da Impostazioni › 
 
 ## Menu e ordini
 
-- **Menu** (solo amministratore): piatti divisi per reparto (Antipasti, Primi, Secondi, Contorni, Pizze, Dolci, Bevande, Vini) con ingredienti, prezzo e disponibilità; **Aggiunte** a pagamento per reparto.
-- **Ordine**: dal tavolo › Prendi ordine. Ogni piatto si può personalizzare (togli ingredienti, aggiunte, richiesta del cliente). Le pizze vanno in pizzeria.
-- **Pizzeria**: un biglietto per tavolo con le pizze in attesa e il tempo trascorso; si segna fatta ogni pizza o tutto il tavolo. Il cameriere riceve l'avviso «Pizze pronte».
-- **Conto**: dal tavolo › Chiudi conto.
+- **Menu** (solo amministratore): piatti per reparto (Antipasti, Primi, Secondi, Contorni, Pizze, Dolci, Bevande, Vini) con ingredienti, **14 allergeni** (Reg. UE 1169/2011), prezzo e disponibilità; **Aggiunte** a pagamento.
+- **Ordine** dal tavolo: ogni piatto si personalizza (togli ingredienti, aggiunte, richiesta) e ha la sua **uscita** (1ª, 2ª, 3ª, dolci). La prima uscita parte subito, le altre quando il cameriere preme «Manda».
+- **Reparti**: ogni comanda va alla pagina giusta — **Pizzeria**, **Cucina** o **Bar** (configurabile per reparto). Si segna fatto piatto per piatto o tutto il tavolo; il cameriere riceve l'avviso «pronto».
+- **Senza rete**: le modifiche restano sul telefono e partono appena torna la connessione.
+- **Conto**: coperto, sconto, alla romana, pagamento per piatti, contanti/carta, **stampa del preconto** (non fiscale) e della comanda.
+- **Seggioloni** per bambini sulle prenotazioni, visibili sulla pianta.
+- **Menu con QR code** (`menu.html`): i clienti vedono piatti, prezzi e allergeni.
+- **Statistiche**: incassi, scontrino medio, piatti e pizze più venduti, tempi di preparazione, metodi di pagamento.
+
+| Ruolo | Pagina |
+|---|---|
+| Pizzaiolo | Pizzeria |
+| Cuoco | Cucina |
+| Barista | Bar |
 
 ## Server (Google Sheets)
 
 Dati e account sono in un foglio Google con lo script [`apps-script/Code.gs`](apps-script/Code.gs):
 
 - foglio **Dati**: sale, tavoli, prenotazioni e impostazioni (una riga per documento);
-- foglio **Utenti**: account; le password sono salvate solo come impronta con sale.
+- foglio **Utenti**: account; le password sono salvate solo come impronta con sale;
+- foglio **Archivio**: ogni giorno ordini (dopo 3 giorni), conti (7) e prenotazioni (45) passano qui, così l'app resta veloce; le statistiche li leggono comunque;
+- **backup automatico** giornaliero su Drive, cartella «il Casato · Backup», conservato 30 giorni (importabile dall'app).
+
+Il file `apps-script/appsscript.json` limita i permessi dello script al solo foglio collegato e ai file che crea su Drive.
 
 I permessi sono verificati dallo script, non dal telefono.
 

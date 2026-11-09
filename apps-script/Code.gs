@@ -3,19 +3,24 @@
  * Pubblicare come App web: Esegui come "Me", Accesso "Chiunque".
  * @OnlyCurrentDoc
  */
-const SCRIPT_VERSION = 2;
+const SCRIPT_VERSION = 3;
+const ARCHIVE_SHEET = 'Archivio';
+// Dopo quanti giorni i documenti passano nel foglio Archivio (restano leggibili per le statistiche).
+const KEEP_DAYS = { orders: 3, bills: 7, reservations: 45 };
+const BACKUP_DAYS = 30;
 const DATA_SHEET = 'Dati';
 const USERS_SHEET = 'Utenti';
 const DATA_HEAD = ['collezione', 'id', 'json', 'aggiornato', 'eliminato', 'da'];
 const USERS_HEAD = ['id', 'nome', 'email', 'sale', 'impronta', 'ruolo', 'registrato', 'titolare'];
-// Chi può scrivere ogni collezione. Gli ordini li scrivono camerieri, gestori e amministratori;
-// il pizzaiolo può solo segnare le pizze fatte (controllato in pizzaOnly_).
+// Chi può scrivere ogni collezione. Ordini e conti li scrivono camerieri, gestori e amministratori;
+// pizzaiolo, cuoco e barista possono solo segnare i piatti fatti (controllato in pizzaOnly_).
 const WRITERS = {
   maps: ['gestore', 'admin'], reservations: ['gestore', 'admin'], settings: ['admin'], menu: ['admin'],
-  orders: ['cameriere', 'gestore', 'admin']
+  orders: ['cameriere', 'gestore', 'admin'], bills: ['cameriere', 'gestore', 'admin']
 };
-const ROLES = ['pending', 'cameriere', 'pizzaiolo', 'gestore', 'admin'];
-const LEVEL = { pending: 0, cameriere: 1, pizzaiolo: 1, gestore: 2, admin: 3 };
+const STATION_ROLES = ['pizzaiolo', 'cuoco', 'barista'];
+const ROLES = ['pending', 'cameriere', 'pizzaiolo', 'cuoco', 'barista', 'gestore', 'admin'];
+const LEVEL = { pending: 0, cameriere: 1, pizzaiolo: 1, cuoco: 1, barista: 1, gestore: 2, admin: 3 };
 const TOKEN_DAYS = 60;
 const HASH_ROUNDS = 300;
 
@@ -32,6 +37,7 @@ function doPost(e) {
     const a = String(req.action || '');
     if (a === 'register') return out_(register_(req));
     if (a === 'login') return out_(login_(req));
+    if (a === 'publicMenu') return out_(publicMenu_());
     const me = auth_(req.token);
     if (!me) return out_({ ok: false, code: 'unauthenticated', message: 'Accesso scaduto: entra di nuovo.' });
     if (a === 'me') return out_({ ok: true, me: pub_(me) });
@@ -42,6 +48,8 @@ function doPost(e) {
     if (a === 'setRole') return out_(setRole_(me, req));
     if (a === 'resetPassword') return out_(resetPassword_(me, req));
     if (a === 'deleteUser') return out_(deleteUser_(me, req));
+    if (a === 'query') return out_(query_(me, req));
+    if (a === 'status') return out_(status_(me));
     return out_({ ok: false, code: 'invalid-argument', message: 'Azione sconosciuta' });
   } catch (err) {
     return out_({ ok: false, code: 'internal', message: String(err && err.message || err) });
@@ -232,7 +240,8 @@ function setVersion_(v) {
 function pull_(me, req) {
   if (level_(me) < LEVEL.cameriere) return { ok: false, code: 'pending', message: 'Account in attesa di approvazione.', me: pub_(me) };
   const since = Number(req.since || 0), ver = version_();
-  if (since && since >= ver) return { ok: true, now: ver, docs: [], me: pub_(me) };
+  const epoch = epoch_();
+  if (since && since >= ver) return { ok: true, now: ver, epoch: epoch, docs: [], me: pub_(me) };
   const docs = [];
   rows_(sheet_(DATA_SHEET, DATA_HEAD), DATA_HEAD.length).forEach(function (r) {
     const upd = Number(r[3]) || 0;
@@ -242,7 +251,7 @@ function pull_(me, req) {
     if (!deleted) { try { data = JSON.parse(String(r[2])); } catch (e) { return; } }
     docs.push({ col: String(r[0]), id: String(r[1]), data: data, deleted: deleted, at: upd });
   });
-  return { ok: true, now: ver, docs: docs, me: pub_(me) };
+  return { ok: true, now: ver, epoch: epoch, docs: docs, me: pub_(me) };
 }
 
 function write_(me, req) {
@@ -254,7 +263,7 @@ function write_(me, req) {
     const o = ops[i], writers = WRITERS[o.col];
     if (!writers) return { ok: false, code: 'invalid-argument', message: 'Collezione non valida.' };
     o.limited = writers.indexOf(role) < 0;
-    if (o.limited && !(o.col === 'orders' && role === 'pizzaiolo' && o.op === 'set'))
+    if (o.limited && !(o.col === 'orders' && STATION_ROLES.indexOf(role) >= 0 && o.op === 'set'))
       return { ok: false, code: 'permission-denied', message: 'Non hai il permesso per questa modifica.' };
     if (!/^[A-Za-z0-9_\-.:@+~]{1,120}$/.test(String(o.id || ''))) return { ok: false, code: 'invalid-argument', message: 'Identificativo non valido.' };
     if (o.op === 'set') {
@@ -262,6 +271,7 @@ function write_(me, req) {
       if (o.json.length > 45000) return { ok: false, code: 'invalid-argument', message: 'Documento troppo grande.' };
     } else if (o.op !== 'delete') return { ok: false, code: 'invalid-argument', message: 'Operazione non valida.' };
   }
+  let res;
   const lock = LockService.getScriptLock(); lock.waitLock(25000);
   try {
     const sh = sheet_(DATA_SHEET, DATA_HEAD);
@@ -273,11 +283,11 @@ function write_(me, req) {
       const o = ops[i];
       if (!o.limited) continue;
       const row = index[o.col + '/' + o.id];
-      if (!row) return { ok: false, code: 'permission-denied', message: 'Il pizzaiolo può solo segnare le pizze fatte.' };
+      if (!row) return { ok: false, code: 'permission-denied', message: 'Puoi solo segnare i piatti fatti.' };
       const cur = sh.getRange(row, 3, 1, 3).getValues()[0];
       let old = null; try { old = JSON.parse(String(cur[0])); } catch (e) {}
       if (!old || cur[2] === true || cur[2] === 'TRUE' || !pizzaOnly_(old, o.data))
-        return { ok: false, code: 'permission-denied', message: 'Il pizzaiolo può solo segnare le pizze fatte.' };
+        return { ok: false, code: 'permission-denied', message: 'Puoi solo segnare i piatti fatti.' };
     }
     let ver = Math.max(Date.now(), version_() + 1);
     const appends = [];
@@ -289,8 +299,11 @@ function write_(me, req) {
     });
     if (appends.length) sh.getRange(sh.getLastRow() + 1, 1, appends.length, DATA_HEAD.length).setValues(appends);
     setVersion_(ver);
-    return { ok: true, now: ver };
+    if (ops.some(function (o) { return o.col === 'menu' || o.col === 'settings'; })) CacheService.getScriptCache().remove('PUBMENU');
+    res = { ok: true, now: ver };
   } finally { lock.releaseLock(); }
+  maintenance_();
+  return res;
 }
 
 /* ---------- pizzeria ---------- */
@@ -308,4 +321,126 @@ function pizzaOnly_(oldD, newD) {
     return c;
   };
   return canon_(strip(oldD)) === canon_(strip(newD));
+}
+
+/* ---------- archivio, backup, menu pubblico ---------- */
+function prop_(k) { return PropertiesService.getScriptProperties().getProperty(k); }
+function setProp_(k, v) { PropertiesService.getScriptProperties().setProperty(k, v); }
+function epoch_() {
+  const c = CacheService.getScriptCache(), v = c.get('EPOCH');
+  if (v !== null && v !== undefined) return Number(v);
+  const p = Number(prop_('EPOCH') || 0);
+  c.put('EPOCH', String(p), 21600);
+  return p;
+}
+function today_() { return Utilities.formatDate(new Date(), 'Europe/Rome', 'yyyy-MM-dd'); }
+function minusDays_(day, n) {
+  const d = new Date(day + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() - n);
+  return d.toISOString().slice(0, 10);
+}
+// Una volta al giorno, alla prima modifica: archivia i dati vecchi e salva un backup su Drive.
+function maintenance_() {
+  const day = today_(), c = CacheService.getScriptCache();
+  if (c.get('MAINT') === day) return;
+  if (prop_('MAINT_DAY') === day) { c.put('MAINT', day, 21600); return; }
+  setProp_('MAINT_DAY', day); c.put('MAINT', day, 21600);
+  try { archive_(day); setProp_('ARCHIVE_ERR', ''); } catch (e) { setProp_('ARCHIVE_ERR', String(e && e.message || e)); }
+  try { backup_(day); setProp_('BACKUP_ERR', ''); } catch (e) { setProp_('BACKUP_ERR', String(e && e.message || e)); }
+}
+function archive_(day) {
+  const lock = LockService.getScriptLock(); lock.waitLock(25000);
+  try {
+    const sh = sheet_(DATA_SHEET, DATA_HEAD), n = sh.getLastRow() - 1;
+    if (n <= 0) return;
+    const rows = sh.getRange(2, 1, n, DATA_HEAD.length).getValues(), now = Date.now();
+    const keep = [], move = [];
+    let purged = 0;
+    rows.forEach(function (r) {
+      const col = String(r[0]), deleted = r[4] === true || r[4] === 'TRUE';
+      if (deleted) { if (now - Number(r[3]) > 7 * 864e5) { purged++; return; } keep.push(r); return; }
+      const days = KEEP_DAYS[col];
+      if (!days) { keep.push(r); return; }
+      let d = null; try { d = JSON.parse(String(r[2])).date; } catch (e) {}
+      if (d && d < minusDays_(day, days)) move.push(r); else keep.push(r);
+    });
+    if (!move.length && !purged) return;
+    if (move.length) { const ar = sheet_(ARCHIVE_SHEET, DATA_HEAD); ar.getRange(ar.getLastRow() + 1, 1, move.length, DATA_HEAD.length).setValues(move); }
+    sh.getRange(2, 1, n, DATA_HEAD.length).clearContent();
+    if (keep.length) sh.getRange(2, 1, keep.length, DATA_HEAD.length).setValues(keep);
+    const ep = Date.now();
+    setProp_('EPOCH', String(ep)); CacheService.getScriptCache().put('EPOCH', String(ep), 21600);
+    setVersion_(Math.max(ep, version_() + 1));
+    setProp_('LAST_ARCHIVE', JSON.stringify({ at: ep, moved: move.length, purged: purged }));
+  } finally { lock.releaseLock(); }
+}
+function allDocs_() {
+  const out = { maps: {}, res: {}, settings: {}, menu: {}, orders: {}, bills: {} };
+  [ARCHIVE_SHEET, DATA_SHEET].forEach(function (name) {
+    const sh = SpreadsheetApp.getActive().getSheetByName(name); if (!sh) return;
+    rows_(sh, DATA_HEAD.length).forEach(function (r) {
+      if (r[4] === true || r[4] === 'TRUE') return;
+      let d; try { d = JSON.parse(String(r[2])); } catch (e) { return; }
+      const col = String(r[0]), id = String(r[1]);
+      if (col === 'reservations') out.res[id] = Object.assign({ id: id }, d);
+      else if (col === 'settings') { if (id === 'main') out.settings = d; }
+      else if (out[col]) out[col][id] = d;
+    });
+  });
+  return out;
+}
+function backup_(day) {
+  let folder = null; const fid = prop_('BACKUP_FOLDER');
+  if (fid) { try { folder = DriveApp.getFolderById(fid); if (folder.isTrashed()) folder = null; } catch (e) { folder = null; } }
+  if (!folder) { folder = DriveApp.createFolder('il Casato · Backup'); setProp_('BACKUP_FOLDER', folder.getId()); }
+  const name = 'backup-il-casato-' + day + '.json', json = JSON.stringify(allDocs_());
+  const old = folder.getFilesByName(name); while (old.hasNext()) old.next().setTrashed(true);
+  folder.createFile(name, json, 'application/json');
+  const limit = Date.now() - BACKUP_DAYS * 864e5, it = folder.getFiles();
+  while (it.hasNext()) { const f = it.next(); if (f.getDateCreated().getTime() < limit) f.setTrashed(true); }
+  setProp_('LAST_BACKUP', JSON.stringify({ at: Date.now(), name: name, size: json.length }));
+}
+function query_(me, req) {
+  if (level_(me) < LEVEL.cameriere) return { ok: false, code: 'permission-denied', message: 'Account in attesa di approvazione.' };
+  const col = String(req.col || ''), from = String(req.from || ''), to = String(req.to || '9999');
+  if (['reservations', 'bills', 'orders'].indexOf(col) < 0) return { ok: false, code: 'invalid-argument', message: 'Collezione non valida.' };
+  const found = {};
+  [ARCHIVE_SHEET, DATA_SHEET].forEach(function (name) {
+    const sh = SpreadsheetApp.getActive().getSheetByName(name); if (!sh) return;
+    rows_(sh, DATA_HEAD.length).forEach(function (r) {
+      if (String(r[0]) !== col) return;
+      const id = String(r[1]);
+      if (r[4] === true || r[4] === 'TRUE') { delete found[id]; return; }
+      let d; try { d = JSON.parse(String(r[2])); } catch (e) { return; }
+      if (d && d.date >= from && d.date <= to) found[id] = Object.assign({ id: id }, d); else delete found[id];
+    });
+  });
+  return { ok: true, docs: Object.keys(found).slice(0, 5000).map(function (k) { return found[k]; }) };
+}
+function status_(me) {
+  if (level_(me) < LEVEL.admin) return { ok: false, code: 'permission-denied', message: 'Solo l\'amministratore.' };
+  const parse = function (k) { try { return JSON.parse(prop_(k) || 'null'); } catch (e) { return null; } };
+  let folderUrl = '';
+  try { const fid = prop_('BACKUP_FOLDER'); if (fid) folderUrl = DriveApp.getFolderById(fid).getUrl(); } catch (e) {}
+  const ar = SpreadsheetApp.getActive().getSheetByName(ARCHIVE_SHEET);
+  return { ok: true, version: SCRIPT_VERSION, lastBackup: parse('LAST_BACKUP'), lastArchive: parse('LAST_ARCHIVE'),
+    backupErr: prop_('BACKUP_ERR') || '', archiveErr: prop_('ARCHIVE_ERR') || '', folderUrl: folderUrl,
+    rows: Math.max(0, sheet_(DATA_SHEET, DATA_HEAD).getLastRow() - 1), archiveRows: ar ? Math.max(0, ar.getLastRow() - 1) : 0 };
+}
+function publicMenu_() {
+  const c = CacheService.getScriptCache(), hit = c.get('PUBMENU');
+  if (hit) return JSON.parse(hit);
+  const dishes = [], extras = []; let settings = {};
+  rows_(sheet_(DATA_SHEET, DATA_HEAD), DATA_HEAD.length).forEach(function (r) {
+    if (r[4] === true || r[4] === 'TRUE') return;
+    const col = String(r[0]);
+    if (col !== 'menu' && !(col === 'settings' && String(r[1]) === 'main')) return;
+    let d; try { d = JSON.parse(String(r[2])); } catch (e) { return; }
+    if (col === 'settings') { settings = d; return; }
+    if (d.kind === 'extra') extras.push({ name: d.name, price: d.price, cats: d.cats || [] });
+    else dishes.push({ name: d.name, cat: d.cat, price: d.price, ingredients: d.ingredients || [], desc: d.desc || '',
+      allergens: d.allergens || [], available: d.available !== false, pos: d.pos || 0 });
+  });
+  const res = { ok: true, restaurant: settings.restaurant || 'il Casato', cover: Number(settings.coverPrice || 0), dishes: dishes, extras: extras };
+  try { c.put('PUBMENU', JSON.stringify(res), 120); } catch (e) {}
+  return res;
 }
