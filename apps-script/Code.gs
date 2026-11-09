@@ -24,6 +24,12 @@ const LEVEL = { pending: 0, cameriere: 1, pizzaiolo: 1, cuoco: 1, barista: 1, ge
 const TOKEN_DAYS = 60;
 const HASH_ROUNDS = 300;
 
+/** Esegui questa funzione dall'editor per fare subito un backup su Drive (la prima volta chiede l'autorizzazione). */
+function backupAdesso() {
+  backup_(today_());
+  Logger.log(prop_('LAST_BACKUP'));
+}
+
 /* ---------- ingresso ---------- */
 function doGet() {
   return out_({ ok: true, app: 'il-casato', version: SCRIPT_VERSION });
@@ -388,15 +394,22 @@ function allDocs_() {
   });
   return out;
 }
+// Backup con il servizio avanzato Drive (v3) e il permesso "drive.file":
+// lo script vede solo la cartella e i file che crea lui, non il resto del tuo Drive.
+function backupFolder_() {
+  const fid = prop_('BACKUP_FOLDER');
+  if (fid) { try { const f = Drive.Files.get(fid, { fields: 'id,trashed' }); if (!f.trashed) return fid; } catch (e) {} }
+  const f = Drive.Files.create({ name: 'il Casato · Backup', mimeType: 'application/vnd.google-apps.folder' });
+  setProp_('BACKUP_FOLDER', f.id);
+  return f.id;
+}
 function backup_(day) {
-  let folder = null; const fid = prop_('BACKUP_FOLDER');
-  if (fid) { try { folder = DriveApp.getFolderById(fid); if (folder.isTrashed()) folder = null; } catch (e) { folder = null; } }
-  if (!folder) { folder = DriveApp.createFolder('il Casato · Backup'); setProp_('BACKUP_FOLDER', folder.getId()); }
+  const fid = backupFolder_();
   const name = 'backup-il-casato-' + day + '.json', json = JSON.stringify(allDocs_());
-  const old = folder.getFilesByName(name); while (old.hasNext()) old.next().setTrashed(true);
-  folder.createFile(name, json, 'application/json');
-  const limit = Date.now() - BACKUP_DAYS * 864e5, it = folder.getFiles();
-  while (it.hasNext()) { const f = it.next(); if (f.getDateCreated().getTime() < limit) f.setTrashed(true); }
+  const list = Drive.Files.list({ q: "'" + fid + "' in parents and trashed = false", fields: 'files(id,name,createdTime)', pageSize: 200 }).files || [];
+  const limit = Date.now() - BACKUP_DAYS * 864e5;
+  list.forEach(function (f) { if (f.name === name || new Date(f.createdTime).getTime() < limit) Drive.Files.update({ trashed: true }, f.id); });
+  Drive.Files.create({ name: name, parents: [fid], mimeType: 'application/json' }, Utilities.newBlob(json, 'application/json', name));
   setProp_('LAST_BACKUP', JSON.stringify({ at: Date.now(), name: name, size: json.length }));
 }
 function query_(me, req) {
@@ -420,7 +433,7 @@ function status_(me) {
   if (level_(me) < LEVEL.admin) return { ok: false, code: 'permission-denied', message: 'Solo l\'amministratore.' };
   const parse = function (k) { try { return JSON.parse(prop_(k) || 'null'); } catch (e) { return null; } };
   let folderUrl = '';
-  try { const fid = prop_('BACKUP_FOLDER'); if (fid) folderUrl = DriveApp.getFolderById(fid).getUrl(); } catch (e) {}
+  try { const fid = prop_('BACKUP_FOLDER'); if (fid) folderUrl = 'https://drive.google.com/drive/folders/' + fid; } catch (e) {}
   const ar = SpreadsheetApp.getActive().getSheetByName(ARCHIVE_SHEET);
   return { ok: true, version: SCRIPT_VERSION, lastBackup: parse('LAST_BACKUP'), lastArchive: parse('LAST_ARCHIVE'),
     backupErr: prop_('BACKUP_ERR') || '', archiveErr: prop_('ARCHIVE_ERR') || '', folderUrl: folderUrl,
