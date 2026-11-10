@@ -521,6 +521,26 @@ body.ordering .toast{bottom:calc(92px + env(safe-area-inset-bottom,0px))}
   .pr-qr img{width:45mm;height:45mm}
 }
 
+
+/* ---------- pass: piatti da ritirare ---------- */
+.calls{position:fixed;right:max(16px,env(safe-area-inset-right,0px));bottom:calc(16px + env(safe-area-inset-bottom,0px));z-index:65;width:min(360px,calc(100vw - 32px));
+  max-height:60vh;overflow:auto;box-shadow:0 14px 40px var(--shadow);border:2px solid var(--accent)}
+.calls-h{display:flex;align-items:center;gap:8px;padding:10px 12px;position:sticky;top:0;background:var(--card);border-bottom:1px solid var(--line)}
+.calls-h b{font-family:var(--f-sign);letter-spacing:.06em;flex:1}
+.calls-l{display:flex;flex-direction:column}
+.call{display:flex;flex-direction:column;gap:6px;padding:10px 12px;border-top:1px solid var(--line)}
+.call:first-child{border-top:0}
+.call .ch{display:flex;justify-content:space-between;gap:8px;align-items:baseline}
+.call .ch b{font-family:var(--f-sign);font-size:20px}
+.call .ch span{font-family:var(--f-mono);font-size:12px;color:var(--muted)}
+.call.late .ch span{color:var(--accent);font-weight:700}
+.pline .pacts{display:flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:flex-end}
+.btn.send{border-color:var(--busy);color:var(--busy)}
+.btn.send:hover{background:var(--busy);color:var(--busy-ink)}
+.pline .sent{font-size:11px;font-weight:700;color:var(--busy);text-transform:uppercase;letter-spacing:.08em}
+body.ordering .calls{display:none}
+@media (max-width:640px){.calls{left:max(8px,env(safe-area-inset-left,0px));right:max(8px,env(safe-area-inset-right,0px));width:auto;bottom:calc(8px + env(safe-area-inset-bottom,0px))}}
+
 /* ---------- responsive ---------- */
 @media (max-width:1180px){
   .main{grid-template-columns:minmax(0,1fr) 340px}.tools{grid-template-columns:minmax(0,1fr)}
@@ -653,6 +673,7 @@ body.ordering .toast{bottom:calc(92px + env(safe-area-inset-bottom,0px))}
 <div class="scrim" id="scrim" hidden></div>
 <div class="toast" id="toast" hidden></div>
 <div class="ovl" id="orderUI" hidden></div>
+<aside class="card calls" id="calls" hidden aria-live="polite"></aside>
 <div id="dlg"></div>
 <div id="modal"></div>
 
@@ -1977,6 +1998,7 @@ const algBadges=list=>(list||[]).length?`<span class="algs">${list.map(a=>`<i ti
 function orderTag(t){
   const os=ordersFor(t.id);if(!os.length)return'';
   const s=tableState(os);
+  if(os.some(o=>(o.calls||[]).some(c=>!c.pickedAt)))return`<span class="otag ready">Da ritirare</span>`;
   if(s.ready)return`<span class="otag ready">Pronto da servire</span>`;
   if(s.prep)return`<span class="otag oven">In preparazione ${s.prep}</span>`;
   if(s.waiting)return`<span class="otag wait">Uscita in attesa</span>`;
@@ -1999,13 +2021,12 @@ function notifyOrders(){
     const its=(o.items||[]).filter(it=>itemStation(it)===st&&isFired(o,it));if(!its.length)return;
     const k=o.id+'|'+st+'|'+(o.fired||[1]).join(',');ready[k]=its.every(it=>doneOf(it)>=qtyOf(it));seen[k]=true}));
   if(readyPrev){
-    if(canOrder()){const now=Object.keys(ready).filter(k=>ready[k]&&readyPrev[k]===false);
-      if(now.length){const [oid,st]=now[0].split('|'),o=S.orders[oid];toast('Tavolo '+(o&&o.tableNum||'?')+': pronto in '+STATIONS[st].name.toLowerCase()+(now.length>1?' (e altri '+(now.length-1)+')':''));beep(3)}}
     const mine=STATIONS[S.view]?S.view:myStation();
     if(mine){const nw=Object.keys(seen).filter(k=>k.split('|')[1]===mine&&!seenPrev[k]&&!ready[k]);
       if(nw.length){const o=S.orders[nw[0].split('|')[0]];toast('Nuova comanda '+STATIONS[mine].name.toLowerCase()+': tavolo '+(o&&o.tableNum||'?'));beep(2)}}
   }
   readyPrev=ready;seenPrev=seen;
+  notifyCalls();
 }
 
 /* ---------- pannello del tavolo ---------- */
@@ -2294,7 +2315,8 @@ function renderStation(){
   const sound=prefGet('sound')!=='off';
   const line=(o,{it,i})=>{const q=qtyOf(it),dq=doneOf(it),ok=dq>=q;
     return`<div class="pline${ok?' ok':''}"><span><span class="pn">${q}× ${esc(it.name)}</span> ${modsHTML(it)}</span>
-      <button class="btn sm${ok?'':' primary'}" type="button" data-act="st-line" data-oid="${o.id}" data-i="${i}">${ok?'Rifai':'Fatto'}</button>
+      <span class="pacts">${dq>sentOf(o,i)?`<button class="btn sm send" type="button" data-act="st-call" data-oid="${o.id}" data-i="${i}">Invia alla sala</button>`:dq?'<span class="sent">in sala</span>':''}
+      <button class="btn sm${ok?'':' primary'}" type="button" data-act="st-line" data-oid="${o.id}" data-i="${i}">${ok?'Rifai':'Fatto'}</button></span>
       ${q>1?`<div class="units">${Array.from({length:q},(_,u)=>`<button class="unit${u<dq?' on':''}" type="button" data-act="st-unit" data-oid="${o.id}" data-i="${i}" data-u="${u}" aria-label="${u+1} di ${q}${u<dq?' fatto':''}">${u+1}</button>`).join('')}</div>`:''}</div>`};
   v.innerHTML=`<div class="pz-head"><div><span class="eyebrow">${def.name} · in tempo reale</span><h2 style="margin:0;font-family:var(--f-sign);font-weight:600;font-size:24px;letter-spacing:.04em">Ordini ${st==='bar'?'del bar':st==='cucina'?'della cucina':'delle pizze'}</h2></div>
     <div class="pz-kpis"><div class="card pz-kpi"><b>${todo}</b><span>${def.what} da fare</span></div><div class="card pz-kpi"><b>${open.length}</b><span>tavoli in attesa</span></div></div>
@@ -2309,6 +2331,7 @@ function renderStation(){
           ${wait.length?`<div class="waitbox"><b>In attesa del via</b>${wait.map(({it})=>`<span>${qtyOf(it)}× ${esc(it.name)} · ${COURSE_NAME[+it.course||1]}</span>`).join('')}</div>`:''}
           ${o.note?`<div class="sub" style="text-transform:none;letter-spacing:0;font-weight:600;color:var(--ink)">Nota: ${esc(o.note)}</div>`:''}`).join('')}
         <div class="tf">${t.todo?`<button class="btn primary" type="button" data-act="st-table" data-k="${esc(t.mapId+'|'+t.tableId)}">Tutto il tavolo pronto</button>`:''}
+          ${t.orders.some(({o,fired})=>fired.some(({it,i})=>doneOf(it)>sentOf(o,i)))?`<button class="btn send" type="button" data-act="st-callall" data-k="${esc(t.mapId+'|'+t.tableId)}">Invia pronti alla sala</button>`:''}
           <button class="btn" type="button" data-act="st-print" data-k="${esc(t.mapId+'|'+t.tableId)}" aria-label="Stampa">Stampa</button></div>
       </div>`}).join('')}</div>`
     :`<div class="card pz-empty"><h2>Niente da preparare</h2><p>Le comande per ${def.name.toLowerCase()} compaiono qui appena il cameriere le invia, con il numero del tavolo.</p></div>`}`;
@@ -2317,8 +2340,67 @@ function markDone(oid,i,newDone){
   const o=S.orders[oid];if(!o)return;const n=clone(o);delete n.id;const it=n.items[i];if(!it)return;
   it.doneQty=clamp(newDone,0,qtyOf(it));it.doneAt=it.doneQty?Date.now():null;it.doneBy=it.doneQty?((S.me&&S.me.name)||''):'';
   saveDoc('orders',oid,n);
+  const st=itemStation(it);
+  if(it.doneQty&&stationComplete(o.mapId,o.tableId,st)){const k=callTable(o.mapId,o.tableId,st,true);if(k)toast('Tavolo '+o.tableNum+' completo: avvisata la sala')}
 }
 setInterval(()=>{if(STATIONS[S.view])renderStation()},30000);
+
+/* ---------- chiamate al pass: "invia alla sala" ---------- */
+const sentOf=(o,i)=>(o.calls||[]).reduce((a,c)=>a+(c.items||[]).filter(x=>x.i===i).reduce((s,x)=>s+(+x.qty||0),0),0);
+const tableOrders=(mid,tid)=>openOrders().filter(o=>o.mapId===mid&&o.tableId===tid);
+// Aggiunge a una copia dell'ordine la chiamata per i piatti pronti e non ancora mandati in sala.
+function withCall(o,n,st,all){
+  const items=[];
+  n.items.forEach((it,i)=>{if(itemStation(it)!==st||!isFired(o,it))return;const p=doneOf(it)-sentOf(n,i);if(p>0)items.push({i,qty:p,name:it.name})});
+  if(!items.length)return false;
+  n.calls=[...(n.calls||[]),{id:uid(),at:Date.now(),st,items,all:!!all,by:(S.me&&S.me.name)||''}];
+  return true;
+}
+function stationComplete(mid,tid,st){
+  const its=tableOrders(mid,tid).flatMap(o=>(o.items||[]).filter(it=>itemStation(it)===st&&isFired(o,it)));
+  return its.length&&its.every(it=>doneOf(it)>=qtyOf(it));
+}
+// Manda alla sala tutto quello che è pronto per il tavolo in questo reparto.
+function callTable(mid,tid,st,all){
+  let n=0;
+  tableOrders(mid,tid).forEach(o=>{const c=clone(o);delete c.id;if(withCall(o,c,st,all)){n+=c.calls[c.calls.length-1].items.reduce((a,x)=>a+x.qty,0);saveDoc('orders',o.id,c)}});
+  return n;
+}
+function pendingCalls(){
+  const out=[];
+  openOrders().forEach(o=>(o.calls||[]).forEach(c=>{if(!c.pickedAt)out.push({o,c})}));
+  return out.sort((a,b)=>a.c.at-b.c.at);
+}
+function renderCalls(){
+  const box=$('#calls');if(!box)return;
+  const list=canOrder()&&!myStation()?pendingCalls():[];
+  if(!list.length){box.hidden=true;box.innerHTML='';return}
+  const mins=at=>Math.max(0,Math.round((Date.now()-at)/60000));
+  const notif=('Notification' in window)&&Notification.permission==='default';
+  box.hidden=false;
+  box.innerHTML=`<div class="calls-h"><b>Da ritirare al pass</b><span class="badge">${list.length}</span>
+      ${notif?'<button class="btn sm ghost" type="button" data-act="notif-on">Attiva notifiche</button>':''}
+      <button class="btn sm ghost icon" type="button" data-act="calls-min" aria-label="${S.callsMin?'Apri':'Riduci'}">${S.callsMin?'+':'−'}</button></div>
+    ${S.callsMin?'':`<div class="calls-l">${list.map(({o,c})=>`<div class="call${mins(c.at)>=3?' late':''}">
+      <div class="ch"><b>Tavolo ${esc(o.tableNum)}</b><span>${esc(STATIONS[c.st]?STATIONS[c.st].name:'')} · ${mins(c.at)?mins(c.at)+' min fa':'adesso'}</span></div>
+      <span class="small">${c.all?'<b>Tutto il tavolo pronto</b> · ':''}${esc(c.items.map(x=>x.qty+'× '+x.name).join(', '))}</span>
+      <button class="btn sm primary" type="button" data-act="call-pick" data-oid="${o.id}" data-cid="${c.id}">Ritirato e servito</button></div>`).join('')}</div>`}`;
+}
+let callsSeen=null;
+function notifyCalls(){
+  if(!S.ordersLoaded&&S.mode==='db')return;
+  const ids=new Set(pendingCalls().map(x=>x.c.id));
+  if(callsSeen&&canOrder()&&!myStation()){
+    const nw=pendingCalls().filter(x=>!callsSeen.has(x.c.id));
+    if(nw.length){const {o,c}=nw[nw.length-1];
+      const txt='Ritira al pass: tavolo '+o.tableNum+' · '+(c.all?'tutto pronto in ':'pronto in ')+(STATIONS[c.st]?STATIONS[c.st].name.toLowerCase():'');
+      toast(txt);beep(3);S.callsMin=false;
+      try{if(document.hidden&&('Notification' in window)&&Notification.permission==='granted')new Notification('il Casato · Tavolo '+o.tableNum,{body:txt.replace('Ritira al pass: ','Ritira: ')+' — '+c.items.map(x=>x.qty+'× '+x.name).join(', '),tag:c.id,icon:'icon-192.png'})}catch(e){}}
+  }
+  callsSeen=ids;
+  renderCalls();
+}
+setInterval(()=>{if(!$('#calls').hidden)renderCalls()},30000);
 
 /* ---------- impostazioni: reparti, coperto, QR, backup ---------- */
 function opsSettingsCards(){
@@ -2424,7 +2506,18 @@ document.addEventListener('click',e=>{
       openOrders().filter(o=>o.mapId===mid&&o.tableId===tid).forEach(o=>{const c=clone(o);delete c.id;let ch=false;
         c.items.forEach(it=>{if(itemStation(it)===st&&isFired(o,it)&&doneOf(it)<qtyOf(it)){n+=qtyOf(it)-doneOf(it);it.doneQty=qtyOf(it);it.doneAt=Date.now();it.doneBy=(S.me&&S.me.name)||'';ch=true}});
         if(ch)saveDoc('orders',o.id,c)});
-      renderStation();toast('Tavolo pronto: '+n+' '+STATIONS[st].what);break}
+      callTable(mid,tid,st,true);
+      renderStation();toast('Tavolo pronto: '+n+' '+STATIONS[st].what+' · avvisata la sala');break}
+    case'st-call':{const o=S.orders[b.dataset.oid];if(!o)break;const i=+b.dataset.i,it=o.items[i];const c=clone(o);delete c.id;
+      const p=doneOf(it)-sentOf(o,i);if(p<=0)break;c.calls=[...(c.calls||[]),{id:uid(),at:Date.now(),st:itemStation(it),items:[{i,qty:p,name:it.name}],all:false,by:(S.me&&S.me.name)||''}];
+      saveDoc('orders',o.id,c);renderStation();toast(p+'× '+it.name+' inviato alla sala · tavolo '+o.tableNum);break}
+    case'st-callall':{const [mid,tid]=b.dataset.k.split('|');const n=callTable(mid,tid,S.view,stationComplete(mid,tid,S.view));renderStation();if(n)toast(n+' '+STATIONS[S.view].what+' inviati alla sala');break}
+    case'call-pick':{const o=S.orders[b.dataset.oid];if(!o)break;const c=clone(o);delete c.id;const call=(c.calls||[]).find(x=>x.id===b.dataset.cid);if(!call)break;
+      call.pickedAt=Date.now();call.pickedBy=(S.me&&S.me.name)||'';
+      call.items.forEach(x=>{const it=c.items[x.i];if(it&&doneOf(it)>=qtyOf(it)&&sentOf(c,x.i)>=qtyOf(it))it.served=true});
+      saveDoc('orders',o.id,c);renderCalls();renderStage();renderPanelSoft();toast('Tavolo '+o.tableNum+': ritirato');break}
+    case'calls-min':S.callsMin=!S.callsMin;renderCalls();break;
+    case'notif-on':{try{Notification.requestPermission().then(p=>{toast(p==='granted'?'Notifiche attive su questo dispositivo':'Notifiche non consentite: le trovi nelle impostazioni del browser');renderCalls()})}catch(e){}break}
     case'st-print':{const [mid,tid]=b.dataset.k.split('|');const os=openOrders().filter(o=>o.mapId===mid&&o.tableId===tid);
       if(os.length){const merged=Object.assign({},os[0],{items:os.flatMap(o=>(o.items||[]).map(it=>Object.assign({},it,{course:it.course,_f:isFired(o,it)}))),note:os.map(o=>o.note).filter(Boolean).join(' · ')});printOrder(merged,S.view)}break}
     case'st-sound':prefSet('sound',prefGet('sound')==='off'?'on':'off');if(prefGet('sound')!=='off'){try{actx&&actx.resume()}catch(x){}beep(1)}renderStation();break;

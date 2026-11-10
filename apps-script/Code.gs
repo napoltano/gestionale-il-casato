@@ -3,7 +3,7 @@
  * Pubblicare come App web: Esegui come "Me", Accesso "Chiunque".
  * @OnlyCurrentDoc
  */
-const SCRIPT_VERSION = 3;
+const SCRIPT_VERSION = 4;
 const ARCHIVE_SHEET = 'Archivio';
 // Dopo quanti giorni i documenti passano nel foglio Archivio (restano leggibili per le statistiche).
 const KEEP_DAYS = { orders: 3, bills: 7, reservations: 45 };
@@ -319,11 +319,12 @@ function canon_(v) {
     .map(function (k) { return JSON.stringify(k) + ':' + canon_(v[k]); }).join(',') + '}';
   return JSON.stringify(v === undefined ? null : v);
 }
-// Vero se tra il vecchio e il nuovo ordine cambiano solo i campi "pizza fatta".
+// Vero se tra il vecchio e il nuovo ordine cambiano solo i campi "piatto fatto" e le chiamate alla sala.
 function pizzaOnly_(oldD, newD) {
   const strip = function (d) {
     const c = JSON.parse(JSON.stringify(d || {}));
     (c.items || []).forEach(function (it) { delete it.doneQty; delete it.doneAt; delete it.doneBy; });
+    delete c.calls; // i reparti possono anche "inviare alla sala" i piatti pronti
     return c;
   };
   return canon_(strip(oldD)) === canon_(strip(newD));

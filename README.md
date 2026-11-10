@@ -23,6 +23,7 @@ Password dimenticata: l'amministratore ne imposta una nuova da Impostazioni › 
 - **Menu** (solo amministratore): piatti per reparto (Antipasti, Primi, Secondi, Contorni, Pizze, Dolci, Bevande, Vini) con ingredienti, **14 allergeni** (Reg. UE 1169/2011), prezzo e disponibilità; **Aggiunte** a pagamento.
 - **Ordine** dal tavolo: ogni piatto si personalizza (togli ingredienti, aggiunte, richiesta) e ha la sua **uscita** (1ª, 2ª, 3ª, dolci). La prima uscita parte subito, le altre quando il cameriere preme «Manda».
 - **Reparti**: ogni comanda va alla pagina giusta — **Pizzeria**, **Cucina** o **Bar** (configurabile per reparto). Si segna fatto piatto per piatto o tutto il tavolo; il cameriere riceve l'avviso «pronto».
+- **Invia alla sala**: dai reparti si manda al pass anche un solo piatto pronto; quando un reparto finisce tutto il tavolo la sala viene avvisata da sola. I camerieri vedono il riquadro «Da ritirare al pass» (con suono e, se attivate, notifiche) e premono «Ritirato e servito».
 - **Senza rete**: le modifiche restano sul telefono e partono appena torna la connessione.
 - **Conto**: coperto, sconto, alla romana, pagamento per piatti, contanti/carta, **stampa del preconto** (non fiscale) e della comanda.
 - **Seggioloni** per bambini sulle prenotazioni, visibili sulla pianta.
